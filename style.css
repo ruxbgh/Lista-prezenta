@@ -151,3 +151,13 @@ td.total { font-weight: 800; }
 @media print {
   body { background: #fff; }
 }
+
+.course-link {
+  display: block;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+.course-link:last-child { border-bottom: 0; }

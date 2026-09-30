@@ -100,7 +100,17 @@
   }
 
   if (!CFG.COURSES[course]) {
-    $('status-line').textContent = 'Linkul nu e complet. Folosește linkul primit de la profesor.';
+    $('status-line').textContent = 'Alege cursul la care ești.';
+    var list = document.createElement('div');
+    list.className = 'panel';
+    Object.keys(CFG.COURSES).forEach(function (k) {
+      var a = document.createElement('a');
+      a.href = '?c=' + encodeURIComponent(k);
+      a.textContent = CFG.COURSES[k];
+      a.className = 'course-link';
+      list.appendChild(a);
+    });
+    $('status-line').after(list);
     return;
   }
   $('course-name').textContent = CFG.COURSES[course];
