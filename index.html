@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prezență la curs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body class="student">
+<main class="narrow">
+  <h1 id="course-name">Prezență la curs</h1>
+  <p class="lede" id="status-line">Se verifică sesiunea…</p>
+
+  <form id="form" class="panel" hidden>
+    <label for="personal">Codul tău personal</label>
+    <div class="remembered" id="remembered" hidden>
+      <span id="remembered-code"></span>
+      <button type="button" class="link" id="forget">Alt cod</button>
+    </div>
+    <input id="personal" autocomplete="off" autocapitalize="characters" spellcheck="false"
+           maxlength="7" placeholder="ex. K7M-Q2P">
+
+    <label for="session">Codul afișat în sală</label>
+    <input id="session" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="4 cifre" autocomplete="off">
+
+    <button type="submit" class="primary" id="submit">Marchează prezența</button>
+  </form>
+
+  <div id="result" class="result" hidden></div>
+</main>
+
+<script>
+(function () {
+  var CFG = window.PREZENTA_CONFIG;
+  var params = new URLSearchParams(location.search);
+  var course = params.get('c') || '';
+  var $ = function (id) { return document.getElementById(id); };
+  var session = null;
+
+  function store(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} }
+  function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function norm(c) { return String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function pretty(c) { return c.length === 6 ? c.slice(0, 3) + '-' + c.slice(3) : c; }
+
+  async function api(body, tries) {
+    tries = tries || 3;
+    for (var i = 0; i < tries; i++) {
+      try {
+        var r = await fetch(CFG.SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(body)
+        });
+        var j = await r.json();
+        if (j.error !== 'server_error') return j;
+      } catch (e) {}
+      await new Promise(function (res) { setTimeout(res, 800 * (i + 1) + Math.random() * 700); });
+    }
+    return { ok: false, error: 'network' };
+  }
+
+  var MSG = {
+    no_session: 'Sesiunea s-a închis. Cere profesorului un cod nou.',
+    wrong_session_code: 'Codul din sală nu e corect. Verifică ecranul și încearcă din nou.',
+    unknown_code: 'Codul personal nu e recunoscut pentru acest curs. Verifică-l în mesajul primit.',
+    bad_code: 'Codul personal are 6 caractere, de exemplu K7M-Q2P.',
+    network: 'Nu s-a putut trimite. Verifică internetul și apasă din nou.'
+  };
+
+  function showResult(ok, text) {
+    var el = $('result');
+    el.hidden = false;
+    el.className = 'result ' + (ok ? 'ok' : 'err');
+    el.textContent = text;
+  }
+
+  function renderRemembered() {
+    var saved = load('prz_code_' + course);
+    $('remembered').hidden = !saved;
+    $('personal').hidden = !!saved;
+    if (saved) $('remembered-code').textContent = pretty(saved);
+  }
+
+  async function refreshStatus() {
+    var s = await api({ action: 'status', course: course }, 2);
+    session = s.ok && s.active ? s : null;
+    if (session) {
+      $('status-line').textContent = 'Săptămâna ' + session.week + '. Sesiunea e deschisă.';
+      $('form').hidden = false;
+    } else {
+      $('status-line').textContent = s.ok
+        ? 'Nu e deschisă nicio sesiune acum. Reîncarcă pagina după ce profesorul afișează codul.'
+        : MSG.network;
+      $('form').hidden = true;
+    }
+  }
+
+  if (!CFG.COURSES[course]) {
+    $('status-line').textContent = 'Linkul nu e complet. Folosește linkul primit de la profesor.';
+    return;
+  }
+  $('course-name').textContent = CFG.COURSES[course];
+  document.title = 'Prezență: ' + CFG.COURSES[course];
+  renderRemembered();
+
+  $('forget').onclick = function () { store('prz_code_' + course, null); renderRemembered(); $('personal').focus(); };
+
+  $('form').onsubmit = async function (ev) {
+    ev.preventDefault();
+    var personal = load('prz_code_' + course) || norm($('personal').value);
+    var sess = $('session').value.trim();
+    if (personal.length !== 6) return showResult(false, MSG.bad_code);
+    if (!/^\d{4}$/.test(sess)) return showResult(false, 'Codul din sală are 4 cifre.');
+
+    // un singur cod personal pe telefon pentru o săptămână
+    if (session) {
+      var usedKey = 'prz_used_' + course + '_' + session.week;
+      var used = load(usedKey);
+      if (used && used !== personal) {
+        return showResult(false, 'De pe acest telefon s-a marcat deja prezența altcuiva în săptămâna asta.');
+      }
+    }
+
+    $('submit').disabled = true;
+    $('submit').textContent = 'Se trimite…';
+    var r = await api({ action: 'checkin', course: course, code: personal, sessionCode: sess });
+    $('submit').disabled = false;
+    $('submit').textContent = 'Marchează prezența';
+
+    if (r.ok) {
+      store('prz_code_' + course, personal);
+      store('prz_used_' + course + '_' + r.week, personal);
+      renderRemembered();
+      $('form').hidden = true;
+      showResult(true, (r.already ? 'Erai deja marcat(ă) prezent(ă)' : 'Prezență înregistrată') +
+        ' pentru săptămâna ' + r.week + '. Total prezențe: ' + r.count + ' din ' + CFG.WEEKS + '.');
+    } else {
+      showResult(false, MSG[r.error] || 'Nu s-a putut înregistra. Încearcă din nou.');
+      if (r.error === 'no_session') refreshStatus();
+    }
+  };
+
+  refreshStatus();
+})();
+</script>
+</body>
+</html>

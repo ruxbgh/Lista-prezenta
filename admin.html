@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Prezență: administrare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<main>
+  <h1>Prezență: administrare</h1>
+  <p class="lede">Listele de studenți rămân în acest browser. Serverul primește doar coduri anonime.</p>
+
+  <section class="panel" id="connect">
+    <h2>Conectare</h2>
+    <label for="pass">Parola ta</label>
+    <input type="password" id="pass" autocomplete="current-password">
+    <div class="bar">
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin:0">
+        <input type="checkbox" id="remember" style="width:auto;margin:0"> Ține minte pe acest laptop
+      </label>
+    </div>
+    <button class="primary" id="connect-btn">Conectează</button>
+    <p class="msg" id="connect-msg"></p>
+    <p class="note">La prima conectare, parola devine parola serverului. Din ea se generează și codurile studenților, deci n-o schimba în timpul semestrului și păstreaz-o undeva sigur.</p>
+  </section>
+
+  <section id="app" hidden>
+    <div class="bar">
+      <label for="course" style="margin:0">Curs</label>
+      <select id="course"></select>
+      <span class="note" id="course-label"></span>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="students" aria-selected="true">Studenți și coduri</button>
+      <button role="tab" data-tab="session" aria-selected="false">Sesiune</button>
+      <button role="tab" data-tab="table" aria-selected="false">Tabel prezență</button>
+    </div>
+
+    <!-- STUDENȚI -->
+    <section data-view="students">
+      <div class="panel">
+        <label for="file">Lista din sistemul facultății (.xls / .xlsx)</label>
+        <input type="file" id="file" accept=".xls,.xlsx">
+        <p class="msg" id="file-msg"></p>
+        <div class="bar">
+          <button class="ghost" id="export-codes">Exportă CSV pentru e-mail</button>
+          <button class="ghost" id="print-slips">Printează bilețele</button>
+          <button class="ghost" id="resend">Retrimite codurile pe server</button>
+          <button class="link" id="clear-list">Șterge lista din acest browser</button>
+        </div>
+        <p class="note">Link pentru studenți: <strong id="student-link"></strong></p>
+      </div>
+      <div class="panel scroll" id="codes-table"></div>
+    </section>
+
+    <!-- SESIUNE -->
+    <section data-view="session" hidden>
+      <div class="panel" id="session-setup">
+        <div class="bar">
+          <label for="week" style="margin:0">Săptămâna</label>
+          <select id="week"></select>
+          <label for="minutes" style="margin:0">Minute</label>
+          <input type="number" id="minutes" min="1" max="60" style="width:90px">
+          <button class="primary" id="start" style="width:auto">Deschide sesiunea</button>
+        </div>
+        <p class="msg" id="session-msg"></p>
+      </div>
+      <div class="stage" id="stage" hidden>
+        <div>
+          <div class="big" id="big-code">0000</div>
+          <div class="meta" id="stage-meta"></div>
+          <div class="bar" style="margin-top:20px">
+            <button class="ghost" id="fullscreen">Ecran complet</button>
+            <button class="ghost" id="stop">Închide sesiunea</button>
+          </div>
+        </div>
+        <div>
+          <div class="qr" id="qr"></div>
+          <div class="url" id="stage-url"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TABEL -->
+    <section data-view="table" hidden>
+      <div class="panel">
+        <div class="bar">
+          <button class="ghost" id="reload-table">Actualizează</button>
+          <button class="ghost" id="export-table">Exportă CSV</button>
+          <label for="threshold" style="margin:0">Evidențiază sub</label>
+          <input type="number" id="threshold" min="0" max="20" style="width:80px">
+          <span class="note">prezențe</span>
+        </div>
+        <p class="note">Apasă pe o celulă ca să marchezi sau să anulezi manual o prezență.</p>
+        <p class="msg" id="table-msg"></p>
+        <div class="scroll" id="att-table"></div>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script>
+(function () {
+  var CFG = window.PREZENTA_CONFIG;
+  var ALPH = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { pass: null, token: null, course: null, codes: {}, timer: null, poll: null, session: null, marks: [] };
+
+  /* ---------- utilitare ---------- */
+  function ls(k, v) {
+    try {
+      if (v === undefined) return localStorage.getItem(k);
+      if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v);
+    } catch (e) { return null; }
+  }
+  function ss(k, v) {
+    try {
+      if (v === undefined) return sessionStorage.getItem(k);
+      if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v);
+    } catch (e) { return null; }
+  }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+  function pretty(c) { return c.slice(0, 3) + '-' + c.slice(3); }
+  function msg(id, text, ok) { var el = $(id); el.textContent = text || ''; el.className = 'msg ' + (ok ? 'ok' : 'err'); }
+  var enc = new TextEncoder();
+
+  async function sha256hex(s) {
+    var b = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(s)));
+    return Array.from(b).map(function (x) { return x.toString(16).padStart(2, '0'); }).join('');
+  }
+  async function deriveCodes(course, students) {
+    var key = await crypto.subtle.importKey('raw', enc.encode(state.pass), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    var out = [];
+    for (var i = 0; i < students.length; i++) {
+      var sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(course + '|' + students[i].id)));
+      var c = '';
+      for (var j = 0; j < 6; j++) c += ALPH[sig[j] % ALPH.length];
+      out.push(c);
+    }
+    return out;
+  }
+
+  async function api(body) {
+    if (!CFG.SCRIPT_URL || CFG.SCRIPT_URL.indexOf('http') !== 0) return { ok: false, error: 'no_url' };
+    body.token = state.token;
+    try {
+      var r = await fetch(CFG.SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body)
+      });
+      return await r.json();
+    } catch (e) { return { ok: false, error: 'network' }; }
+  }
+  var ERR = {
+    no_url: 'Completează SCRIPT_URL în config.js.',
+    network: 'Serverul nu răspunde. Verifică internetul și URL-ul din config.js.',
+    unauthorized: 'Parola nu se potrivește cu cea a serverului.'
+  };
+  function errText(r) { return ERR[r.error] || ('Eroare: ' + (r.detail || r.error)); }
+
+  function studentLink(course) {
+    return new URL('index.html?c=' + encodeURIComponent(course), location.href).href;
+  }
+
+  function downloadCSV(name, rows) {
+    var csv = '\uFEFF' + rows.map(function (r) {
+      return r.map(function (v) { v = String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(';');
+    }).join('\r\n');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  /* ---------- liste locale ---------- */
+  function getList(course) {
+    try { return JSON.parse(ls('prz_list_' + course) || 'null'); } catch (e) { return null; }
+  }
+  function setList(course, data) { ls('prz_list_' + course, data ? JSON.stringify(data) : null); }
+
+  function parseWorkbook(buf) {
+    var wb = XLSX.read(buf, { type: 'array' });
+    var ws = wb.Sheets[wb.SheetNames[0]];
+    var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    var norm = function (v) { return String(v).replace(/\s+/g, ' ').trim().toLowerCase(); };
+    var h = -1, nameCol = -1, idCol = -1, label = '';
+    for (var r = 0; r < rows.length; r++) {
+      rows[r].forEach(function (cell) {
+        var t = String(cell).replace(/\s+/g, ' ').trim();
+        if (/^formati[ae] de studiu/i.test(t)) label = t;
+      });
+      if (h !== -1) continue;
+      var n = rows[r].findIndex(function (c) { var t = norm(c); return t.indexOf('nume') !== -1 && t.indexOf('id') === -1; });
+      var i = rows[r].findIndex(function (c) { return norm(c).indexOf('id persoan') !== -1; });
+      if (n !== -1 && i !== -1) { h = r; nameCol = n; idCol = i; }
+    }
+    if (h === -1) throw new Error('Nu am găsit coloanele „Nume student” și „Id Persoana”.');
+    var students = [], missing = 0;
+    for (var k = h + 1; k < rows.length; k++) {
+      var name = String(rows[k][nameCol] || '').replace(/\s+/g, ' ').trim();
+      if (!name) continue;
+      var id = rows[k][idCol];
+      id = typeof id === 'number' ? String(Math.round(id)) : String(id || '').trim();
+      if (!id) { missing++; continue; }
+      students.push({ name: name, id: id });
+    }
+    if (!students.length) throw new Error('Fișierul nu conține studenți.');
+    return { students: students, label: label, missing: missing };
+  }
+
+  async function ensureCodes(course) {
+    var list = getList(course);
+    if (!list) { state.codes[course] = null; return null; }
+    var codes = await deriveCodes(course, list.students);
+    state.codes[course] = list.students.map(function (s, i) { return { name: s.name, id: s.id, code: codes[i] }; });
+    return state.codes[course];
+  }
+
+  async function pushCodes(course) {
+    var items = state.codes[course];
+    if (!items) return;
+    var r = await api({ action: 'set_codes', course: course, codes: items.map(function (x) { return x.code; }) });
+    if (r.ok) msg('file-msg', r.count + ' coduri anonime sunt pe server pentru acest curs.', true);
+    else msg('file-msg', errText(r));
+  }
+
+  /* ---------- randare: studenți ---------- */
+  async function renderStudents() {
+    var course = state.course;
+    var list = getList(course);
+    $('course-label').textContent = list && list.label ? list.label : '';
+    $('student-link').textContent = studentLink(course);
+    if (!list) {
+      $('codes-table').innerHTML = '<p class="note">Încarcă lista exportată pentru acest curs.</p>';
+      return;
+    }
+    var items = state.codes[course] || await ensureCodes(course);
+    var seen = {}, dup = 0;
+    items.forEach(function (x) { if (seen[x.code]) dup++; seen[x.code] = 1; });
+    $('codes-table').innerHTML =
+      (dup ? '<p class="msg err">Doi studenți au primit același cod. Scrie-mi și schimbăm formatul.</p>' : '') +
+      '<table><thead><tr><th>Nume</th><th>Cod personal</th></tr></thead><tbody>' +
+      items.map(function (x) { return '<tr><td>' + esc(x.name) + '</td><td class="code">' + pretty(x.code) + '</td></tr>'; }).join('') +
+      '</tbody></table><p class="note">' + items.length + ' studenți</p>';
+  }
+
+  $('file').onchange = async function () {
+    var f = this.files[0];
+    if (!f) return;
+    try {
+      var parsed = parseWorkbook(await f.arrayBuffer());
+      setList(state.course, parsed);
+      await ensureCodes(state.course);
+      await renderStudents();
+      msg('file-msg', 'Am citit ' + parsed.students.length + ' studenți' + (parsed.missing ? ' (' + parsed.missing + ' fără Id Persoana, săriți)' : '') + '. Se trimit codurile…', true);
+      await pushCodes(state.course);
+    } catch (e) {
+      msg('file-msg', e.message || 'Fișierul nu a putut fi citit.');
+    }
+    this.value = '';
+  };
+
+  $('resend').onclick = function () { pushCodes(state.course); };
+
+  $('clear-list').onclick = function () {
+    if (!confirm('Ștergi lista acestui curs din browser? Codurile de pe server rămân, dar tabelul nu va mai afișa nume până reîncarci fișierul.')) return;
+    setList(state.course, null);
+    state.codes[state.course] = null;
+    renderStudents();
+  };
+
+  $('export-codes').onclick = function () {
+    var items = state.codes[state.course];
+    if (!items) return msg('file-msg', 'Încarcă mai întâi lista.');
+    var link = studentLink(state.course);
+    var rows = [['Nume', 'Id Persoana', 'Cod personal', 'Link']];
+    items.forEach(function (x) { rows.push([x.name, x.id, pretty(x.code), link]); });
+    downloadCSV('coduri_' + state.course + '.csv', rows);
+  };
+
+  $('print-slips').onclick = function () {
+    var items = state.codes[state.course];
+    if (!items) return msg('file-msg', 'Încarcă mai întâi lista.');
+    var title = CFG.COURSES[state.course];
+    var link = studentLink(state.course);
+    var w = window.open('', '_blank');
+    if (!w) return msg('file-msg', 'Browserul a blocat fereastra. Permite pop-up-urile pentru această pagină.');
+    w.document.write('<!DOCTYPE html><html lang="ro"><head><meta charset="UTF-8"><title>Bilețele ' + esc(title) + '</title><style>' +
+      'body{font-family:Manrope,Segoe UI,sans-serif;margin:12mm}' +
+      '.g{display:grid;grid-template-columns:repeat(3,1fr);gap:0}' +
+      '.s{border:1px dashed #999;padding:5mm;break-inside:avoid;font-size:10pt}' +
+      '.c{font-size:20pt;font-weight:800;letter-spacing:.1em;margin:2mm 0}' +
+      '.u{font-size:7pt;word-break:break-all;color:#444}</style></head><body><div class="g">' +
+      items.map(function (x) {
+        return '<div class="s"><div>' + esc(title) + '</div><strong>' + esc(x.name) + '</strong><div class="c">' + pretty(x.code) + '</div><div class="u">' + esc(link) + '</div></div>';
+      }).join('') + '</div><script>window.onload=function(){window.print()}<\/script></body></html>');
+    w.document.close();
+  };
+
+  /* ---------- randare: sesiune ---------- */
+  function fillWeeks() {
+    var sel = $('week');
+    sel.innerHTML = '';
+    for (var i = 1; i <= CFG.WEEKS; i++) sel.insertAdjacentHTML('beforeend', '<option value="' + i + '">' + i + '</option>');
+    var last = parseInt(ls('prz_lastweek_' + state.course) || '0', 10);
+    sel.value = String(Math.min(last + 1, CFG.WEEKS));
+  }
+
+  function stopTimers() {
+    clearInterval(state.timer); clearInterval(state.poll);
+    state.timer = state.poll = null;
+  }
+
+  function showStage(s) {
+    state.session = s;
+    $('stage').hidden = false;
+    $('session-setup').hidden = true;
+    $('big-code').textContent = s.code;
+    var link = studentLink(state.course);
+    $('stage-url').textContent = link;
+    $('qr').innerHTML = '';
+    new QRCode($('qr'), { text: link, width: 320, height: 320, correctLevel: QRCode.CorrectLevel.M });
+    var present = 0;
+    function tick() {
+      var left = Math.max(0, s.exp - Date.now());
+      var m = Math.floor(left / 60000), sec = Math.floor(left / 1000) % 60;
+      $('stage-meta').textContent = 'Săptămâna ' + s.week + '. ' +
+        (left ? 'Se închide în ' + m + ':' + String(sec).padStart(2, '0') + '.' : 'Sesiunea s-a închis.') +
+        ' Prezenți: ' + present + '.';
+      if (!left) { stopTimers(); }
+    }
+    async function count() {
+      var r = await api({ action: 'attendance', course: state.course });
+      if (r.ok) { present = r.marks.filter(function (x) { return x.week === s.week; }).length; tick(); }
+    }
+    stopTimers();
+    tick(); count();
+    state.timer = setInterval(tick, 1000);
+    state.poll = setInterval(count, 10000);
+  }
+
+  function hideStage() {
+    stopTimers();
+    state.session = null;
+    $('stage').hidden = true;
+    $('session-setup').hidden = false;
+    if (document.fullscreenElement) document.exitFullscreen();
+  }
+
+  async function restoreSession() {
+    hideStage();
+    fillWeeks();
+    var r = await api({ action: 'session', course: state.course });
+    if (r.ok && r.active) showStage(r);
+  }
+
+  $('start').onclick = async function () {
+    if (!state.codes[state.course]) return msg('session-msg', 'Încarcă mai întâi lista de studenți pentru acest curs.');
+    var week = parseInt($('week').value, 10);
+    var minutes = parseInt($('minutes').value, 10) || CFG.SESSION_MINUTES;
+    this.disabled = true;
+    var r = await api({ action: 'start', course: state.course, week: week, minutes: minutes });
+    this.disabled = false;
+    if (!r.ok) return msg('session-msg', errText(r));
+    msg('session-msg', '');
+    ls('prz_lastweek_' + state.course, String(week));
+    showStage(r);
+  };
+
+  $('stop').onclick = async function () {
+    await api({ action: 'stop', course: state.course });
+    hideStage();
+  };
+
+  $('fullscreen').onclick = function () {
+    var el = $('stage');
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (el.requestFullscreen) el.requestFullscreen();
+  };
+
+  /* ---------- randare: tabel ---------- */
+  function renderTable() {
+    var items = state.codes[state.course];
+    if (!items) { $('att-table').innerHTML = '<p class="note">Încarcă lista de studenți ca să vezi numele.</p>'; return; }
+    var on = {};
+    state.marks.forEach(function (m) { on[m.code + '|' + m.week] = 1; });
+    var thr = parseInt($('threshold').value, 10);
+    var head = '<tr><th>Nume</th>';
+    for (var w = 1; w <= CFG.WEEKS; w++) head += '<th>S' + w + '</th>';
+    head += '<th>Total</th></tr>';
+    var body = items.map(function (x) {
+      var total = 0, cells = '';
+      for (var w = 1; w <= CFG.WEEKS; w++) {
+        var p = on[x.code + '|' + w] === 1;
+        if (p) total++;
+        cells += '<td class="cell ' + (p ? 'on' : 'off') + '" data-code="' + x.code + '" data-week="' + w + '">' + (p ? '✓' : '·') + '</td>';
+      }
+      return '<tr class="' + (!isNaN(thr) && total < thr ? 'low' : '') + '"><td>' + esc(x.name) + '</td>' + cells + '<td class="total">' + total + '</td></tr>';
+    }).join('');
+    $('att-table').innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  }
+
+  async function loadTable() {
+    msg('table-msg', 'Se încarcă…', true);
+    var r = await api({ action: 'attendance', course: state.course });
+    if (!r.ok) return msg('table-msg', errText(r));
+    state.marks = r.marks;
+    msg('table-msg', '');
+    renderTable();
+  }
+
+  $('att-table').onclick = async function (ev) {
+    var td = ev.target.closest('td.cell');
+    if (!td) return;
+    var code = td.dataset.code, week = parseInt(td.dataset.week, 10);
+    var present = !td.classList.contains('on');
+    var r = await api({ action: 'set_mark', course: state.course, code: code, week: week, present: present });
+    if (!r.ok) return msg('table-msg', errText(r));
+    state.marks = state.marks.filter(function (m) { return !(m.code === code && m.week === week); });
+    if (present) state.marks.push({ code: code, week: week });
+    renderTable();
+  };
+
+  $('reload-table').onclick = loadTable;
+  $('threshold').oninput = function () { ls('prz_threshold', this.value); renderTable(); };
+
+  $('export-table').onclick = function () {
+    var items = state.codes[state.course];
+    if (!items) return;
+    var on = {};
+    state.marks.forEach(function (m) { on[m.code + '|' + m.week] = 1; });
+    var head = ['Nume'];
+    for (var w = 1; w <= CFG.WEEKS; w++) head.push('S' + w);
+    head.push('Total');
+    var rows = [head];
+    items.forEach(function (x) {
+      var row = [x.name], total = 0;
+      for (var w = 1; w <= CFG.WEEKS; w++) { var p = on[x.code + '|' + w] === 1; if (p) total++; row.push(p ? 1 : 0); }
+      row.push(total);
+      rows.push(row);
+    });
+    downloadCSV('prezenta_' + state.course + '.csv', rows);
+  };
+
+  /* ---------- navigare ---------- */
+  var currentTab = 'students';
+  function showTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('[role=tab]').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
+    document.querySelectorAll('[data-view]').forEach(function (v) { v.hidden = v.dataset.view !== tab; });
+    if (tab === 'students') renderStudents();
+    if (tab === 'session') restoreSession();
+    if (tab === 'table') loadTable();
+  }
+  document.querySelector('.tabs').onclick = function (ev) {
+    var b = ev.target.closest('[role=tab]');
+    if (b) showTab(b.dataset.tab);
+  };
+
+  $('course').onchange = async function () {
+    state.course = this.value;
+    ls('prz_course', state.course);
+    hideStage();
+    await ensureCodes(state.course);
+    showTab(currentTab);
+  };
+
+  /* ---------- conectare ---------- */
+  async function connect(pass, silent) {
+    state.pass = pass;
+    state.token = await sha256hex('prezenta-admin|' + pass);
+    var r = await api({ action: 'init' });
+    if (!r.ok) {
+      state.pass = state.token = null;
+      if (!silent) msg('connect-msg', errText(r));
+      return false;
+    }
+    if ($('remember').checked) ls('prz_pass', pass); else ss('prz_pass', pass);
+    $('connect').hidden = true;
+    $('app').hidden = false;
+    var sel = $('course');
+    sel.innerHTML = Object.keys(CFG.COURSES).map(function (k) { return '<option value="' + esc(k) + '">' + esc(CFG.COURSES[k]) + '</option>'; }).join('');
+    var saved = ls('prz_course');
+    state.course = CFG.COURSES[saved] ? saved : Object.keys(CFG.COURSES)[0];
+    sel.value = state.course;
+    $('minutes').value = CFG.SESSION_MINUTES;
+    $('threshold').value = ls('prz_threshold') || Math.ceil(CFG.WEEKS / 2);
+    for (var k in CFG.COURSES) await ensureCodes(k);
+    if (r.initialized) msg('file-msg', 'Serverul a fost configurat cu parola ta.', true);
+    showTab('students');
+    return true;
+  }
+
+  $('connect-btn').onclick = function () {
+    var p = $('pass').value;
+    if (p.length < 10) return msg('connect-msg', 'Folosește o parolă de cel puțin 10 caractere.');
+    connect(p);
+  };
+  $('pass').onkeydown = function (e) { if (e.key === 'Enter') $('connect-btn').click(); };
+
+  var remembered = ls('prz_pass') || ss('prz_pass');
+  if (remembered) { $('remember').checked = !!ls('prz_pass'); connect(remembered, true); }
+})();
+</script>
+</body>
+</html>
