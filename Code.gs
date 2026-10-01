@@ -72,8 +72,17 @@ function sheet_(name, header) {
   return sh;
 }
 
-function codesSheet_() { return sheet_('Coduri', ['curs', 'cod']); }
-function marksSheet_() { return sheet_('Prezenta', ['curs', 'cod', 'saptamana', 'prezent', 'data']); }
+// Coloana cu coduri e forțată ca text, ca Sheets să nu transforme un cod ca 23E456 în număr.
+function codesSheet_() {
+  var sh = sheet_('Coduri', ['curs', 'cod']);
+  sh.getRange('B:B').setNumberFormat('@');
+  return sh;
+}
+function marksSheet_() {
+  var sh = sheet_('Prezenta', ['curs', 'cod', 'saptamana', 'prezent', 'data']);
+  sh.getRange('B:B').setNumberFormat('@');
+  return sh;
+}
 
 function course_(b) {
   var c = String(b.course || '');
