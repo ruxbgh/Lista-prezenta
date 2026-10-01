@@ -28,6 +28,7 @@
   --err: #f97066; --err-bg: #3a1d1d; --low: #33291a;
 }
 *, *::before, *::after { box-sizing: inherit; }
+[hidden] { display: none !important; }
 html, body { margin: 0; min-height: 100%; }
 body {
   background: var(--bg);

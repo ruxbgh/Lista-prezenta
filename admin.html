@@ -151,7 +151,7 @@
 
   async function api(body) {
     if (!CFG.SCRIPT_URL || CFG.SCRIPT_URL.indexOf('http') !== 0) return { ok: false, error: 'no_url' };
-    body.token = state.token;
+    if (!body.token) body.token = state.token;
     try {
       var r = await fetch(CFG.SCRIPT_URL, {
         method: 'POST',
@@ -477,16 +477,24 @@
   };
 
   /* ---------- conectare ---------- */
+  var connecting = false;
   async function connect(pass, silent) {
-    state.pass = pass;
-    state.token = await sha256hex('prezenta-admin|' + pass);
-    var r = await api({ action: 'init' });
+    if (connecting || state.token) return false;
+    connecting = true;
+    $('connect-btn').disabled = true;
+    var token = await sha256hex('prezenta-admin|' + pass);
+    var r = await api({ action: 'init', token: token });
+    connecting = false;
+    $('connect-btn').disabled = false;
     if (!r.ok) {
-      state.pass = state.token = null;
       if (!silent) msg('connect-msg', errText(r));
+      else { ls('prz_pass', null); ss('prz_pass', null); }
       return false;
     }
-    if ($('remember').checked) ls('prz_pass', pass); else ss('prz_pass', pass);
+    state.pass = pass;
+    state.token = token;
+    if ($('remember').checked) { ls('prz_pass', pass); ss('prz_pass', null); }
+    else { ss('prz_pass', pass); ls('prz_pass', null); }
     $('connect').hidden = true;
     $('app').hidden = false;
     var sel = $('course');
